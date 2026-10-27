@@ -1,0 +1,59 @@
+# FIQO AI — backend dependencies (pinned for reproducible builds)
+#
+# REQUIRES PYTHON 3.11-3.13 — 3.12 recommended (matches the Docker image).
+# Python 3.14 changed typing.Union's internals; SQLAlchemy 2.0.36 crashes on it
+# while mapping `Mapped[int | None]` fields. Newer SQLAlchemy adds 3.14 support,
+# but then these pins no longer describe what you actually tested.
+# Install:  pip install -r requirements.txt
+# Audit:    pip install pip-audit && pip-audit -r requirements.txt
+
+# Web framework & server
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+gunicorn==23.0.0
+
+# Data validation & settings
+pydantic>=2.10.4
+pydantic-settings>=2.7.1
+email-validator==2.2.0
+
+# Database
+SQLAlchemy==2.0.36
+# Postgres driver (production). SQLite needs no extra driver.
+psycopg[binary]==3.2.13
+
+# ── Auth & security ───────────────────────────────────────────────────────
+# PyJWT, not python-jose: python-jose has had no release since 3.3.0 (2021),
+# is effectively unmaintained, and is flagged by pip-audit / Dependabot
+# (CVE-2024-33663, CVE-2024-33664).
+PyJWT==2.10.1
+# bcrypt directly, not passlib: passlib 1.7.4 (2020, unmaintained) reads
+# bcrypt.__about__.__version__, removed in bcrypt >= 4.1 — that pairing raises
+# an internal error on every hash. Hash format is unchanged, so existing
+# accounts keep working.
+bcrypt==4.2.1
+
+# Rate limiting
+slowapi==0.1.9
+
+# File handling
+python-multipart==0.0.20
+pypdf==5.1.0
+
+# AI provider
+groq==0.13.1
+
+# Config
+python-dotenv==1.0.1
+
+# ── Email ─────────────────────────────────────────────────────────────────
+# MX-record lookups, so a registration with a domain that cannot receive mail
+# ("asdf@asdf.com") is rejected at signup instead of becoming a dead account.
+dnspython==2.7.0
+# Runtime dependency, not only a test one: the Resend transport posts over HTTP,
+# for hosts that block outbound SMTP ports.
+httpx==0.28.1
+
+# ── Testing / tooling (dev only) ──────────────────────────────────────────
+pytest==8.3.4
+pip-audit==2.7.3

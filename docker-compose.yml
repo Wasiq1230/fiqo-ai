@@ -1,0 +1,107 @@
+# ── FIQO AI — production-style stack ───────────────────────────────────
+#   Postgres  →  FastAPI backend  →  Nginx (serves the SPA + proxies /api)
+#
+# Only ONE port is published: the web container. Postgres and the API are
+# reachable solely on the private compose network, so neither can be probed
+# from the internet.
+#
+# Setup:
+#   1. cp .env.example .env                 (compose-level vars: DB password etc.)
+#   2. cp backend/.env.production backend/.env  and fill in real values
+#   3. docker compose up -d --build
+#   4. Put a TLS terminator (Caddy / nginx / Cloudflare) in front of port 8080.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-FiQO}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-FiQO}
+      # Force password auth even for local socket connections.
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # No `ports:` — the database is never reachable from outside the stack.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-FiQO} -d ${POSTGRES_DB:-FiQO}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    networks: [internal]
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      # Overrides .env so the app points at the compose Postgres service.
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-FiQO}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-FiQO}
+      # The app sits behind the nginx container, so X-Forwarded-For is
+      # trustworthy here and per-IP rate limits use the real client IP.
+      TRUST_PROXY: "true"
+      FORWARDED_ALLOW_IPS: "*"
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
+    depends_on:
+      db:
+        condition: service_healthy
+    # No `ports:` either — only the web container talks to the API.
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=4).status==200 else sys.exit(1)"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 25s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          # A stuck AI call or a huge PDF should degrade one container, not the
+          # whole host.
+          memory: 1g
+    networks: [internal]
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        # Empty = same origin. The bundle then calls /api/... on its own host,
+        # which nginx proxies to the backend. Nothing about the API's real
+        # address (or any key) ends up in the JavaScript shipped to browsers.
+        VITE_API_URL: ${VITE_API_URL:-}
+        # Your real public URL. Used for canonical/og:url tags, robots.txt and
+        # sitemap.xml — pointing these at a domain you don't own hurts SEO.
+        VITE_SITE_URL: ${SITE_URL:-http://localhost:8080}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        # service_started is not enough: nginx resolves the `backend` hostname
+        # when it loads its config, and starts proxying immediately.
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    networks: [internal]
+
+volumes:
+  pgdata:
+
+networks:
+  internal:
+    driver: bridge

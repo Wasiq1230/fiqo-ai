@@ -1,0 +1,14 @@
+# Backend .dockerignore — keep the image small and free of secrets.
+venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+*.sqlite3
+*.db
+.pytest_cache/
+.git/
+.gitignore
+tests/
+README.md
